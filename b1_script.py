@@ -1,36 +1,30 @@
-#!/usr/bin/env python3
-from pathlib import Path
 import csv
-
-CSV_PATH = Path(__file__).with_name("network_devices_2.csv")
-
-
-def load_devices(csv_path: Path):
-    """Read network device data from the CSV file and return a list of dicts."""
-    devices = []
-
-    with csv_path.open("r", newline="", encoding="utf-8") as csv_file:
-        reader = csv.DictReader(csv_file)
-        for row in reader:
-            clean_row = {
-                key.strip(): (value.strip() if isinstance(value, str) else value)
-                for key, value in row.items()
-            }
-            devices.append(clean_row)
-
-    return devices
+from pathlib import Path
 
 
-def main():
-    devices = load_devices(CSV_PATH)
-    print(f"Loaded {len(devices)} devices from {CSV_PATH.name}")
+CSV_FILE = Path(__file__).with_name("network_devices_2.csv")
 
-    for device in devices:
-        name = device.get("Device Name", "Unknown")
-        address = device.get("Device Address", "Unknown")
-        location = device.get("Location", "Unknown")
-        print(f"{name:<12} | {address:<15} | {location}")
+
+def should_exclude(device_name: str) -> bool:
+    """Return True for devices that should be skipped."""
+    name = device_name.strip().lower()
+    return (
+        name.startswith("router")
+        or name.startswith("sw")
+        or "switch" in name
+        or name == "smtp"
+    )
+
+
+def load_devices():
+    """Read the CSV and return only valid devices."""
+    with CSV_FILE.open(newline="") as csvfile:
+        reader = csv.DictReader(csvfile)
+        return [row for row in reader if not should_exclude(row["Device Name"])]
 
 
 if __name__ == "__main__":
-    main()
+    devices = load_devices()
+    print(f"Remaining devices: {len(devices)}")
+    for device in devices:
+        print(f"{device['Device Name']} - {device['Device Address']}")
