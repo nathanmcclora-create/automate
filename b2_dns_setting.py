@@ -1,3 +1,6 @@
+# Creating a script to check DNS settings on network devices listed in a CSV file, excluding certain device types based on their names.
+
+
 import csv
 import re
 from pathlib import Path

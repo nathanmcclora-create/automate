@@ -1,3 +1,5 @@
+# Creating a script to ping network devices listed in a CSV file, excluding certain device types based on their names.
+
 import csv
 import subprocess
 from pathlib import Path
