@@ -1,0 +1,104 @@
+Dear Stakeholders,
+
+This is an automated alert to inform you that the following device(s) have been identified as compromised during the recent network scan:
+
+Device Name: API
+IP Address: 10.10.10.200
+Last Checked: 2026-08-21 06:30:45
+
+Immediate investigation and remediation are recommended to prevent further impact.
+
+If you have any questions or require additional information, please contact the IT support team.
+
+Best regards,  
+Network Monitoring System
+
+
+---
+
+Dear Stakeholders,
+
+This is an automated alert to inform you that the following device(s) have been identified as compromised during the recent network scan:
+
+Device Name: DB
+IP Address: 10.10.10.210
+Last Checked: 2026-08-21 06:30:45
+
+Immediate investigation and remediation are recommended to prevent further impact.
+
+If you have any questions or require additional information, please contact the IT support team.
+
+Best regards,  
+Network Monitoring System
+
+
+---
+
+Dear Stakeholders,
+
+This is an automated alert to inform you that the following device(s) have been identified as compromised during the recent network scan:
+
+Device Name: DNS1
+IP Address: 10.10.10.10
+Last Checked: 2026-08-21 06:30:45
+
+Immediate investigation and remediation are recommended to prevent further impact.
+
+If you have any questions or require additional information, please contact the IT support team.
+
+Best regards,  
+Network Monitoring System
+
+
+---
+
+Dear Stakeholders,
+
+This is an automated alert to inform you that the following device(s) have been identified as compromised during the recent network scan:
+
+Device Name: DNS2
+IP Address: 10.10.10.20
+Last Checked: 2026-08-21 06:30:45
+
+Immediate investigation and remediation are recommended to prevent further impact.
+
+If you have any questions or require additional information, please contact the IT support team.
+
+Best regards,  
+Network Monitoring System
+
+
+---
+
+Dear Stakeholders,
+
+This is an automated alert to inform you that the following device(s) have been identified as compromised during the recent network scan:
+
+Device Name: SVR1
+IP Address: 192.168.20.210
+Last Checked: 2026-08-21 06:30:45
+
+Immediate investigation and remediation are recommended to prevent further impact.
+
+If you have any questions or require additional information, please contact the IT support team.
+
+Best regards,  
+Network Monitoring System
+
+
+---
+
+Dear Stakeholders,
+
+This is an automated alert to inform you that the following device(s) have been identified as compromised during the recent network scan:
+
+Device Name: SVR2
+IP Address: 192.168.30.210
+Last Checked: 2026-08-21 06:30:45
+
+Immediate investigation and remediation are recommended to prevent further impact.
+
+If you have any questions or require additional information, please contact the IT support team.
+
+Best regards,  
+Network Monitoring System
