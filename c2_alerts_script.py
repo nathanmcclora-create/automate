@@ -1,138 +1,138 @@
-"""Create and verify a ticket through the Helpdesk API.
+"""Create Helpdesk API tickets for DNS alerts and print the API responses."""
 
-The API is expected to expose ``GET /api/tickets`` and
-``POST /api/tickets``.  The token is included here because this is a
-coursework scaffold; in a production script, load it from a secret store or
-environment variable instead.
-"""
-
-import argparse
 import json
+import re
+import subprocess
 import sys
-from typing import Any
+from datetime import datetime, timezone
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
 API_HOST = "api.d522.wgu.internal"
 API_PORT = 5000
-API_BASE_URL = f"http://{API_HOST}:{API_PORT}"
-API_TOKEN = "vGkbXkGLqQSo7YLflp9DutuG8st4xdPPF7wnTcwB0FE"
 TICKETS_PATH = "/api/tickets"
-REQUEST_TIMEOUT_SECONDS = 10
+API_TOKEN = "vGkbXkGLqQSo7YLflp9DutuG8st4xdPPF7wnTcwB0FE"
+API_URL = f"http://{API_HOST}:{API_PORT}{TICKETS_PATH}"
+DNS_CHECK_SCRIPT = Path(__file__).with_name("b2_dns_setting.py")
 
 
-class HelpdeskAPIError(RuntimeError):
-	"""Raised when the Helpdesk API cannot complete a request."""
+def api_request(method: str, payload: dict | None = None) -> tuple[int, object]:
+	"""Send an authenticated request and return its HTTP status and JSON body."""
+	body = None if payload is None else json.dumps(payload).encode("utf-8")
+	request = Request(
+		API_URL,
+		data=body,
+		method=method,
+		headers={
+			"Authorization": f"Bearer {API_TOKEN}",
+			"Accept": "application/json",
+			"Content-Type": "application/json",
+		},
+	)
 
-
-class HelpdeskAPI:
-	def __init__(self, base_url: str = API_BASE_URL, token: str = API_TOKEN):
-		self.base_url = base_url.rstrip("/")
-		self.token = token
-
-	def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
-		body = json.dumps(payload).encode("utf-8") if payload is not None else None
-		request = Request(
-			f"{self.base_url}{path}",
-			data=body,
-			method=method,
-			headers={
-				"Accept": "application/json",
-				"Authorization": f"Bearer {self.token}",
-				"Content-Type": "application/json",
-			},
-		)
-
+	try:
+		with urlopen(request, timeout=15) as response:
+			response_body = response.read().decode("utf-8")
+			return response.status, json.loads(response_body) if response_body else {}
+	except HTTPError as exc:
+		error_body = exc.read().decode("utf-8", errors="replace")
 		try:
-			with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-				response_body = response.read().decode("utf-8")
-		except HTTPError as exc:
-			details = exc.read().decode("utf-8", errors="replace")
-			raise HelpdeskAPIError(f"{method} {path} failed ({exc.code}): {details}") from exc
-		except URLError as exc:
-			raise HelpdeskAPIError(f"Could not connect to {self.base_url}: {exc.reason}") from exc
+			details = json.loads(error_body)
+		except json.JSONDecodeError:
+			details = error_body
+		return exc.code, details
+	except URLError as exc:
+		raise RuntimeError(f"Could not connect to {API_URL}: {exc.reason}") from exc
 
-		if not response_body:
-			return None
-		try:
-			return json.loads(response_body)
-		except json.JSONDecodeError as exc:
-			raise HelpdeskAPIError(f"{method} {path} returned invalid JSON") from exc
 
-	def list_tickets(self) -> Any:
-		return self._request("GET", TICKETS_PATH)
+def verify_api_access() -> None:
+	"""Verify authentication and ticket creation with a harmless test ticket."""
+	status, response = api_request(
+		"POST",
+		{
+			"title": "Helpdesk API connectivity test",
+			"description": "Test ticket created by c2_alerts_script.py to verify Helpdesk API access.",
+			"priority": "medium",
+		},
+	)
+	print(f"API connectivity test: HTTP {status}")
+	print(json.dumps(response, indent=2))
+	if not 200 <= status < 300 or not isinstance(response, dict) or "id" not in response:
+		raise RuntimeError("Helpdesk API connectivity test was not successful.")
 
-	def create_ticket(self, title: str, description: str) -> Any:
-		# Adjust these field names here if the deployed API documents a
-		# different ticket schema.
-		return self._request(
-			"POST",
-			TICKETS_PATH,
+
+def run_dns_check() -> str:
+	"""Run the DNS validation script and return its combined output."""
+	result = subprocess.run(
+		[sys.executable, str(DNS_CHECK_SCRIPT)],
+		capture_output=True,
+		text=True,
+		check=False,
+		cwd=str(DNS_CHECK_SCRIPT.parent),
+	)
+	return result.stdout + result.stderr
+
+
+def parse_alert_devices(output: str) -> list[dict[str, str]]:
+	"""Extract device details from MISCONFIGURED DNS check results."""
+	pattern = re.compile(
+		r"^(?P<device>.+?) \((?P<ip>[^)]+)\) - (?P<status>OK|MISCONFIGURED)\s*$",
+		re.MULTILINE,
+	)
+	devices = []
+	matches = list(pattern.finditer(output))
+	for index, match in enumerate(matches):
+		if match.group("status") != "MISCONFIGURED":
+			continue
+		next_match_start = matches[index + 1].start() if index + 1 < len(matches) else len(output)
+		devices.append(
 			{
-				"title": title,
-				"description": description,
-				"priority": "medium",
-				"status": "open",
-			},
+				"device_name": match.group("device").strip(),
+				"ip_address": match.group("ip").strip(),
+				"details": output[match.end() : next_match_start].strip(),
+			}
 		)
+	return devices
 
 
-def ticket_id(ticket_response: Any) -> Any:
-	"""Extract a ticket identifier from common API response shapes."""
-	if not isinstance(ticket_response, dict):
-		return None
-	if ticket_response.get("id") is not None:
-		return ticket_response["id"]
-	if ticket_response.get("ticket_id") is not None:
-		return ticket_response["ticket_id"]
-	nested_ticket = ticket_response.get("ticket")
-	if isinstance(nested_ticket, dict):
-		return nested_ticket.get("id", nested_ticket.get("ticket_id"))
-	return None
-
-
-def ticket_is_present(tickets_response: Any, created_ticket: Any) -> bool:
-	"""Check that the create response appears in the ticket collection."""
-	created_id = ticket_id(created_ticket)
-	if created_id is None:
-		return False
-
-	tickets = tickets_response.get("tickets", tickets_response) if isinstance(tickets_response, dict) else tickets_response
-	if not isinstance(tickets, list):
-		return False
-	return any(ticket_id(ticket) == created_id for ticket in tickets)
+def create_alert_ticket(device: dict[str, str]) -> tuple[int, object]:
+	"""Create one Helpdesk ticket for a device alert."""
+	checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+	payload = {
+		"title": f"DNS configuration alert: {device['device_name']} ({device['ip_address']})",
+		"description": (
+			"The device is misconfigured or could not be checked for the required DNS servers.\n\n"
+			f"Device: {device['device_name']}\n"
+			f"Address: {device['ip_address']}\n"
+			f"Checked at: {checked_at}\n"
+			f"Details: {device['details']}"
+		),
+		"priority": "medium",
+	}
+	return api_request("POST", payload)
 
 
 def main() -> int:
-	parser = argparse.ArgumentParser(description=__doc__)
-	parser.add_argument("--title", default="Helpdesk API connectivity test")
-	parser.add_argument(
-		"--description",
-		default="Test ticket created by c2_alerts_script.py to verify Helpdesk API access.",
-	)
-	args = parser.parse_args()
-
-	api = HelpdeskAPI()
 	try:
-		api.list_tickets()
-		print("Helpdesk API authentication and connectivity: OK")
+		verify_api_access()
+		devices = parse_alert_devices(run_dns_check())
+		if not devices:
+			print("No misconfigured devices were found; no alert tickets were created.")
+			return 0
 
-		created_ticket = api.create_ticket(args.title, args.description)
-		created_id = ticket_id(created_ticket)
-		if created_id is None:
-			raise HelpdeskAPIError(
-				"Ticket creation returned successfully, but no ticket id was found in the response."
-			)
-		print(f"Ticket created: {created_id}")
-
-		current_tickets = api.list_tickets()
-		if not ticket_is_present(current_tickets, created_ticket):
-			raise HelpdeskAPIError(f"Created ticket {created_id} was not found in GET /api/tickets")
-		print(f"Ticket verification: OK (ticket {created_id} is present)")
-		return 0
-	except HelpdeskAPIError as exc:
-		print(f"Helpdesk API check failed: {exc}", file=sys.stderr)
+		all_successful = True
+		for device in devices:
+			status, response = create_alert_ticket(device)
+			successful = 200 <= status < 300 and isinstance(response, dict) and "id" in response
+			all_successful = all_successful and successful
+			result = "SUCCESS" if successful else "FAILED"
+			print(f"\n{result}: {device['device_name']} ({device['ip_address']}) - HTTP {status}")
+			print(json.dumps(response, indent=2))
+		return 0 if all_successful else 1
+	except (RuntimeError, OSError) as exc:
+		print(f"ERROR: {exc}", file=sys.stderr)
 		return 1
 
 
