@@ -116,6 +116,47 @@ def read_ssh_dns(device: dict[str, str]) -> tuple[list[str], str]:
         client.close()
 
 
+def verify_dns_connection(device: dict[str, str], dns_servers: list[str]) -> tuple[bool, str]:
+    """Check whether each configured DNS server is reachable from the device."""
+    if not dns_servers:
+        return False, "No DNS servers configured"
+
+    dns_args = " ".join(f'"{server}"' for server in dns_servers)
+    command = (
+        f'for dns in {dns_args}; do '
+        'ping -c 1 -W 1 "$dns" >/dev/null 2>&1 || echo "DNS_UNREACHABLE:$dns"; '
+        'done'
+    )
+
+    if device["address"].lower() == "dhcp":
+        output, error = run_console_command(device, command)
+    else:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                hostname=device["address"],
+                username=device["username"],
+                password=device["password"],
+                timeout=SSH_TIMEOUT_SECONDS,
+                banner_timeout=SSH_TIMEOUT_SECONDS,
+                auth_timeout=SSH_TIMEOUT_SECONDS,
+            )
+            _, stdout, stderr = client.exec_command(command, timeout=SSH_TIMEOUT_SECONDS)
+            output = stdout.read().decode("utf-8", errors="replace")
+            error = stderr.read().decode("utf-8", errors="replace").strip()
+        except Exception as exc:
+            return False, str(exc)
+        finally:
+            client.close()
+
+    if output and "DNS_UNREACHABLE:" in output:
+        return False, output.strip()
+    if error:
+        return False, error
+    return True, output.strip() or "DNS servers responded to ping checks"
+
+
 def verify_device(device: dict[str, str]) -> bool:
     """Print current and expected DNS settings for one device."""
     address_label = "DHCP" if device["address"].lower() == "dhcp" else device["address"]
@@ -124,13 +165,17 @@ def verify_device(device: dict[str, str]) -> bool:
     else:
         servers, error = read_ssh_dns(device)
 
-    correct = set(servers) == APPROVED_DNS_SERVERS
+    connection_ok, connection_detail = verify_dns_connection(device, servers)
+    correct = set(servers) == APPROVED_DNS_SERVERS and connection_ok
     status = "PASS" if correct else "FAIL"
     print(f"{device['name']} ({address_label}) - {status}")
     print(f"  Current DNS: {servers or 'None'}")
     print(f"  Expected DNS: {sorted(APPROVED_DNS_SERVERS)}")
+    print(f"  DNS connection: {'CONNECTION SUCCESSFUL' if connection_ok else 'OFFLINE'}")
+    if connection_detail and connection_detail != "DNS servers responded to ping checks":
+        print(f"  Connection detail: {connection_detail}")
     if error:
-        print(f"  Connection error: {error}")
+        print(f"  Read error: {error}")
     return correct
 
 
