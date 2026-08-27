@@ -1,53 +1,103 @@
-"""Verify that each managed device uses the internal DNS servers."""
+"""Verify DNS settings on eligible devices in network_devices.csv."""
 
 import csv
 import re
-import sys
+import socket
+import time
 from pathlib import Path
 
 import paramiko
 
 
-CSV_FILE = Path(__file__).with_name("network_devices_2.csv")
+CSV_FILE = Path(__file__).with_name("network_devices.csv")
 APPROVED_DNS_SERVERS = {"10.10.10.10", "10.10.10.20"}
-USERNAME = "ubuntu"
-PASSWORD = "ubuntu"
 SSH_TIMEOUT_SECONDS = 10
+CONSOLE_TIMEOUT_SECONDS = 5
 
 
-def should_check(device_name: str, address: str) -> bool:
-    """Return whether a CSV device is an SSH-managed host to verify."""
-    name = device_name.strip().lower()
+def should_check(name: str, address: str) -> bool:
+    """Exclude infrastructure and entries without an address or DHCP marker."""
+    device_name = name.strip().lower()
+    device_address = address.strip().lower()
     return (
-        bool(address)
-        and address.lower() not in {"dhcp", "none"}
-        and not name.startswith("router")
-        and not name.startswith("sw")
-        and "switch" not in name
-        and name != "smtp"
+        bool(device_address)
+        and device_address != "none"
+        and not device_name.startswith("router")
+        and not device_name.startswith("sw")
+        and "switch" not in device_name
+        and device_name != "smtp"
     )
 
 
 def load_devices() -> list[dict[str, str]]:
-    """Load valid device names and addresses from the inventory CSV."""
+    """Load eligible device information, credentials, and console ports."""
     with CSV_FILE.open(newline="", encoding="utf-8") as csv_file:
-        reader = csv.DictReader(csv_file)
-        return [
-            {"name": row.get("Device Name", "").strip(), "address": row.get("Device Address", "").strip()}
-            for row in reader
-            if should_check(row.get("Device Name", ""), row.get("Device Address", ""))
-        ]
+        devices = []
+        for row in csv.DictReader(csv_file):
+            name = (row.get("Device Name") or "").strip()
+            address = (row.get("Device Address") or "").strip()
+            if should_check(name, address):
+                devices.append(
+                    {
+                        "name": name,
+                        "address": address,
+                        "access_port": (row.get("Access Port") or "").strip(),
+                        "username": (row.get("Username") or "ubuntu").strip(),
+                        "password": (row.get("Password") or "ubuntu").strip(),
+                    }
+                )
+        return devices
 
 
-def read_dns_servers(device: dict[str, str]) -> tuple[list[str], str]:
-    """Connect to a device and read its configured nameservers."""
+def run_console_command(device: dict[str, str], command: str) -> tuple[str, str]:
+    """Run a command on a DHCP device through its local GNS3 console."""
+    try:
+        with socket.create_connection(
+            ("127.0.0.1", int(device["access_port"])),
+            timeout=CONSOLE_TIMEOUT_SECONDS,
+        ) as console:
+            console.settimeout(0.5)
+            output = b""
+            try:
+                while True:
+                    output += console.recv(4096)
+            except (socket.timeout, ConnectionResetError):
+                pass
+
+            console.sendall(f"{device['username']}\n".encode())
+            time.sleep(0.2)
+            console.sendall(f"{device['password']}\n".encode())
+            time.sleep(0.5)
+            console.sendall(f"{command}\n".encode())
+            time.sleep(0.5)
+            while True:
+                try:
+                    output += console.recv(4096)
+                except socket.timeout:
+                    break
+            return output.decode("utf-8", errors="replace"), ""
+    except (OSError, ValueError) as exc:
+        return "", str(exc)
+
+
+def read_dhcp_dns(device: dict[str, str]) -> tuple[list[str], str]:
+    """Read DNS nameservers from a DHCP device using its CSV credentials."""
+    output, error = run_console_command(
+        device, "cat /etc/resolv.conf 2>/dev/null || resolvectl dns"
+    )
+    servers = re.findall(r"^\s*nameserver\s+(\S+)", output, re.MULTILINE)
+    return servers, error
+
+
+def read_ssh_dns(device: dict[str, str]) -> tuple[list[str], str]:
+    """Read DNS nameservers from a fixed-address device over SSH."""
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
         client.connect(
             hostname=device["address"],
-            username=USERNAME,
-            password=PASSWORD,
+            username=device["username"],
+            password=device["password"],
             timeout=SSH_TIMEOUT_SECONDS,
             banner_timeout=SSH_TIMEOUT_SECONDS,
             auth_timeout=SSH_TIMEOUT_SECONDS,
@@ -60,35 +110,38 @@ def read_dns_servers(device: dict[str, str]) -> tuple[list[str], str]:
         error = stderr.read().decode("utf-8", errors="replace").strip()
         servers = re.findall(r"^\s*nameserver\s+(\S+)", output, re.MULTILINE)
         return servers, error
+    except Exception as exc:
+        return [], str(exc)
     finally:
         client.close()
 
 
 def verify_device(device: dict[str, str]) -> bool:
-    """Print one device's DNS settings and return whether they are correct."""
-    print(f"\n{device['name']} ({device['address']})")
-    try:
-        servers, error = read_dns_servers(device)
-        correct = set(servers) == APPROVED_DNS_SERVERS
-        status = "SUCCESS - DNS settings changed correctly" if correct else "FAILED - DNS settings are incorrect"
-        print(f"  Configured DNS: {servers or 'None'}")
-        print(f"  Expected DNS: {sorted(APPROVED_DNS_SERVERS)}")
-        print(f"  {status}")
-        if error:
-            print(f"  Command errors: {error}")
-        return correct
-    except Exception as exc:
-        print(f"  FAILED - unable to verify device: {exc}")
-        return False
+    """Print current and expected DNS settings for one device."""
+    address_label = "DHCP" if device["address"].lower() == "dhcp" else device["address"]
+    if device["address"].lower() == "dhcp":
+        servers, error = read_dhcp_dns(device)
+    else:
+        servers, error = read_ssh_dns(device)
+
+    correct = set(servers) == APPROVED_DNS_SERVERS
+    status = "PASS" if correct else "FAIL"
+    print(f"{device['name']} ({address_label}) - {status}")
+    print(f"  Current DNS: {servers or 'None'}")
+    print(f"  Expected DNS: {sorted(APPROVED_DNS_SERVERS)}")
+    if error:
+        print(f"  Connection error: {error}")
+    return correct
 
 
 def main() -> int:
+    """Verify every eligible device in the inventory."""
     devices = load_devices()
-    print(f"Verifying DNS settings on {len(devices)} devices...")
+    print(f"Verifying DNS settings on {len(devices)} devices...\n")
     results = [verify_device(device) for device in devices]
-    successful = sum(results)
-    print(f"\nVerification complete: {successful}/{len(devices)} devices have the correct DNS settings.")
-    return 0 if all(results) else 1
+    passed = sum(results)
+    print(f"\nVerification complete: {passed}/{len(results)} devices passed.")
+    return 0 if results and all(results) else 1
 
 
 if __name__ == "__main__":
