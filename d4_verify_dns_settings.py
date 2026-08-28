@@ -167,7 +167,7 @@ def verify_device(device: dict[str, str]) -> bool:
 
     connection_ok, connection_detail = verify_dns_connection(device, servers)
     correct = set(servers) == APPROVED_DNS_SERVERS and connection_ok
-    status = "PASS" if correct else "FAIL"
+    status = "CORRECT" if correct else "MISCONFIGURED"
     print(f"{device['name']} ({address_label}) - {status}")
     print(f"  Current DNS: {servers or 'None'}")
     print(f"  Expected DNS: {sorted(APPROVED_DNS_SERVERS)}")
