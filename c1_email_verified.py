@@ -1,4 +1,5 @@
 """Generate and send urgent compromise emails for failing DNS devices."""
+"""Verify that the SMTP server accepted the email for each device."""
 
 import re
 import smtplib

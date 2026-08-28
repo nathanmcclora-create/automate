@@ -1,6 +1,4 @@
-# Creating a script to run the DNS status check, extract the failing devices,
-# and send the resulting alerts through the Helpdesk API using the provided
-# bearer token. This keeps the workflow consistent with the SMTP/API service.
+""" Created a script to send email alerts to stakeholders when DNS connectivity issues are detected. """
 
 import json
 import os
