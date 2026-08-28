@@ -1,136 +1,140 @@
-# Creating a script to send email alerts to stakeholders when certain network devices are found to be offline or misconfigured based on the output of a DNS validation script.
-# This script also retrieves SMTP server information from a CSV file or environment variables to send the email notifications.
-# Emails are sent to a predefined stakeholder email address with details about the affected device(s) and the time of the check.
+# Creating a script to run the DNS status check, extract the failing devices,
+# and send the resulting alerts through the Helpdesk API using the provided
+# bearer token. This keeps the workflow consistent with the SMTP/API service.
 
-import csv
+import json
 import os
 import re
-import smtplib
 import subprocess
 import sys
 from datetime import datetime
-from email.message import EmailMessage
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
-CSV_FILE = Path(__file__).with_name("network_devices_2.csv")
-FROM_ADDR = "network-monitoring@localdomain"
-TO_ADDR = "stakeholders@localdomain"
+API_HOST = "api.d522.wgu.internal"
+API_PORT = 5000
+API_PATH = "/api/tickets"
+API_TOKEN = "vGkbXkGLqQSo7YLflp9DutuG8st4xdPPF7wnTcwB0FE"
+API_URL = f"http://{API_HOST}:{API_PORT}{API_PATH}"
+SMTP_FALLBACK_HOST = os.getenv("SMTP_HOST", "api.d522.wgu.internal")
+SMTP_FALLBACK_PORT = int(os.getenv("SMTP_PORT", "5000"))
+DNS_STATUS_SCRIPT = Path(__file__).with_name("b2_dns_status.py")
 
 
-def get_smtp_server():
-    """Find the SMTP server record in the network devices CSV."""
-    override_host = os.getenv("SMTP_HOST")
-    override_port = os.getenv("SMTP_PORT")
-    override_user = os.getenv("SMTP_USERNAME")
-    override_password = os.getenv("SMTP_PASSWORD")
-
-    if override_host:
-        return {
-            "host": override_host,
-            "port": int(override_port or 25),
-            "username": override_user or "",
-            "password": override_password or "",
-        }
-
-    with CSV_FILE.open(newline="") as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            device_name = (row.get("Device Name") or "").strip().lower()
-            address = (row.get("Device Address") or "").strip()
-            if device_name == "smtp" and address == "10.10.10.100":
-                return {
-                    "host": address,
-                    "port": int((row.get("Access Port") or "587").strip()),
-                    "username": (row.get("Username") or "").strip(),
-                    "password": (row.get("Password") or "").strip(),
-                }
-    raise RuntimeError("SMTP server information not found in network_devices_2.csv")
-
-
-def run_dns_check():
-    """Run the DNS validation script and return its combined output."""
+def run_dns_status() -> str:
+    """Run b2_dns_status.py and return its full output."""
     result = subprocess.run(
-        [sys.executable, "b2_dns_setting.py"],
+        [sys.executable, str(DNS_STATUS_SCRIPT)],
         capture_output=True,
         text=True,
         check=False,
-        cwd=str(Path(__file__).resolve().parent),
+        cwd=str(DNS_STATUS_SCRIPT.parent),
     )
     return result.stdout + result.stderr
 
 
-def parse_devices(output: str):
-    """Extract device name and IP from the DNS script output."""
+def parse_bad_devices(output: str) -> list[dict[str, str]]:
+    """Parse the DNS status script output into device/email alerts."""
     pattern = re.compile(
-        r"^(?P<device>.+?) \((?P<ip>\d+\.\d+\.\d+\.\d+)\) - (?P<status>OFFLINE|MISCONFIGURED)",
-        re.MULTILINE,
+        r"Device name:\s*(?P<device>.+?)\s*\n"
+        r"IP address of DNS:\s*(?P<dns>.+?)\s*\n"
+        r"Status:\s*(?P<status>.+?)(?:\n\n|$)",
+        re.DOTALL,
     )
 
     devices = []
     for match in pattern.finditer(output):
-        devices.append(
-            {
-                "device_name": match.group("device").strip(),
-                "ip_address": match.group("ip").strip(),
-                "status": match.group("status").strip(),
-            }
-        )
+        device_name = match.group("device").strip()
+        dns_ip = match.group("dns").strip()
+        status = match.group("status").strip()
+        if device_name and dns_ip and status:
+            devices.append(
+                {
+                    "device_name": device_name,
+                    "dns_ip": dns_ip,
+                    "status": status,
+                }
+            )
     return devices
 
 
-def build_email_body(device_name: str, ip_address: str, timestamp: str) -> str:
+def build_email_body(device: dict[str, str]) -> str:
+    """Build the stakeholder email body for one device."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return (
         "Dear Stakeholders,\n\n"
-        "This is an automated alert to inform you that the following device(s) have been identified as compromised during the recent network scan:\n\n"
-        f"Device Name: {device_name}\n"
-        f"IP Address: {ip_address}\n"
-        f"Last Checked: {timestamp}\n\n"
-        "Immediate investigation and remediation are recommended to prevent further impact.\n\n"
-        "If you have any questions or require additional information, please contact the IT support team.\n\n"
-        "Best regards,\n"
-        "Network Monitoring System."
+        "This is an automated alert from the DNS monitoring service.\n\n"
+        f"Device name: {device['device_name']}\n"
+        f"IP address of DNS: {device['dns_ip']}\n"
+        f"Status: {device['status']}\n"
+        f"Last checked: {timestamp}\n\n"
+        "Please investigate and remediate the reported DNS issue as soon as possible.\n\n"
+        "Regards,\n"
+        "Network Monitoring Team"
     )
 
 
-def send_email(device_name: str, ip_address: str, smtp_config: dict):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    body = build_email_body(device_name, ip_address, timestamp)
-
-    message = EmailMessage()
-    message["Subject"] = "Network Monitoring Alert - Device Offline"
-    message["From"] = FROM_ADDR
-    message["To"] = TO_ADDR
-    message.set_content(body)
+def api_request(method: str, payload: dict | None = None) -> tuple[int, object]:
+    """Send a request to the mail/helpdesk API using the bearer token."""
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = Request(
+        API_URL,
+        data=body,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {API_TOKEN}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+    )
 
     try:
-        with smtplib.SMTP(smtp_config["host"], smtp_config["port"], timeout=10) as server:
-            server.ehlo()
-            if server.has_extn("STARTTLS"):
-                server.starttls()
-                server.ehlo()
+        with urlopen(request, timeout=15) as response:
+            response_body = response.read().decode("utf-8")
+            return response.status, json.loads(response_body) if response_body else {}
+    except HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        try:
+            return exc.code, json.loads(error_body)
+        except json.JSONDecodeError:
+            return exc.code, {"error": error_body}
+    except URLError as exc:
+        raise RuntimeError(f"Could not reach {API_URL}: {exc.reason}") from exc
 
-            username = smtp_config.get("username", "")
-            password = smtp_config.get("password", "")
-            if username and password and server.has_extn("AUTH"):
-                server.login(username, password)
 
-            server.send_message(message)
+def send_alert_email(device: dict[str, str]) -> None:
+    """Send a notification through the HTTP API with bearer token auth."""
+    email_body = build_email_body(device)
+    payload = {
+        "title": f"DNS connection issue: {device['device_name']}",
+        "description": email_body,
+        "priority": "medium",
+        "metadata": {
+            "device_name": device['device_name'],
+            "dns_ip": device['dns_ip'],
+            "status": device['status'],
+            "type": "dns_alert",
+        },
+    }
 
-        print(f"Email sent for {device_name} ({ip_address}) to {smtp_config['host']}:{smtp_config['port']}")
-    except Exception as exc:
-        print(f"Could not send email for {device_name} ({ip_address}): {exc}")
-        raise
+    status, response = api_request("POST", payload)
+    if 200 <= status < 300:
+        print(f"Email/API alert created for {device['device_name']} (status={status})")
+        print(json.dumps(response, indent=2))
+    else:
+        print(f"Failed to create alert for {device['device_name']}: HTTP {status}")
+        print(json.dumps(response, indent=2))
 
 
 if __name__ == "__main__":
-    smtp_config = get_smtp_server()
-    output = run_dns_check()
-    devices = parse_devices(output)
+    output = run_dns_status()
+    alerts = parse_bad_devices(output)
 
-    if not devices:
-        print("No devices requiring email alerts were found in the DNS check output.")
+    if not alerts:
+        print("No devices were reported as failing DNS connectivity.")
         raise SystemExit(0)
 
-    for device in devices:
-        send_email(device["device_name"], device["ip_address"], smtp_config)
+    for alert in alerts:
+        send_alert_email(alert)
