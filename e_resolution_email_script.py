@@ -5,7 +5,7 @@ import sys
 from email.message import EmailMessage
 from pathlib import Path
 
-from d5_verify_dns_settings import APPROVED_DNS_SERVERS, load_devices, read_dns_servers
+from d4_verify_dns_settings import APPROVED_DNS_SERVERS, load_devices, read_dns_servers
 
 
 SMTP_HOST = "smtp.d522.wgu.internal"
