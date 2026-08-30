@@ -9,10 +9,25 @@ from pathlib import Path
 import paramiko
 
 
-CSV_FILE = Path(__file__).resolve().parents[2] / "network_devices.csv"
-BACKUP_ROOT = CSV_FILE.parent / "DNS Backup"
 USERNAME = "ubuntu"
 PASSWORD = "ubuntu"
+
+
+def get_csv_path() -> Path:
+    """Resolve the device inventory CSV path, supporting csv/cvs variants."""
+    workspace_root = Path(__file__).resolve().parents[1]
+    candidates = [
+        workspace_root / "network_devices.csv",
+        workspace_root / "network_devices.cvs",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    raise FileNotFoundError(
+        "No inventory file was found. Expected one of: network_devices.csv, network_devices.cvs"
+    )
 
 
 def get_dns_servers(csv_path: Path) -> dict[str, str]:
@@ -111,18 +126,21 @@ def write_backup_file(target_dir: Path, server_name: str, server_ip: str) -> Non
 
 def main() -> None:
     """Create the DNS backup folders and save configuration backups for the DNS servers."""
-    dns_servers = get_dns_servers(CSV_FILE)
-    if not dns_servers:
-        raise RuntimeError(f"No DNS1/DNS2 records were found in {CSV_FILE}.")
+    csv_file = get_csv_path()
+    backup_root = csv_file.parent / "DNS Backup"
 
-    backup_locations = create_backup_structure(BACKUP_ROOT, dns_servers)
+    dns_servers = get_dns_servers(csv_file)
+    if not dns_servers:
+        raise RuntimeError(f"No DNS1/DNS2 records were found in {csv_file}.")
+
+    backup_locations = create_backup_structure(backup_root, dns_servers)
 
     for server_name, ip_address in dns_servers.items():
         folder = backup_locations[server_name]
         write_backup_file(folder, server_name, ip_address)
         print(f"Created backup for {server_name} at {folder / 'record-config.txt'}")
 
-    print(f"\nDNS Backup directory ready: {BACKUP_ROOT}")
+    print(f"\nDNS Backup directory ready: {backup_root}")
 
 
 if __name__ == "__main__":
