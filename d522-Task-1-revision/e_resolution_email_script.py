@@ -3,9 +3,8 @@
 import smtplib
 import sys
 from email.message import EmailMessage
-from pathlib import Path
 
-from d5_verify_dns_settings import APPROVED_DNS_SERVERS, load_devices, read_dns_servers
+from d4_verify_new_dns import load_devices, verify_dns
 
 
 SMTP_HOST = "smtp.d522.wgu.internal"
@@ -17,35 +16,35 @@ SUBJECT = "RESOLVED: DNS Service Issue and Device Compromise—All Issues Remedi
 
 
 def get_resolved_devices() -> list[dict[str, str]]:
-    """Use d5_verify_dns_settings.py's inventory and verification functions."""
-    resolved_devices = []
+    """Use d4_verify_new_dns.py's inventory and verification logic to generate the resolved device list."""
+    resolved_devices: list[dict[str, str]] = []
     for device in load_devices():
         try:
-            servers, error = read_dns_servers(device)
+            is_resolved, _ = verify_dns(device)
         except Exception as exc:
             print(f"Could not verify {device['name']} ({device['address']}): {exc}")
             continue
 
-        if error:
-            print(f"Could not verify {device['name']} ({device['address']}): {error}")
-            continue
-        if set(servers) == APPROVED_DNS_SERVERS:
+        if is_resolved:
             resolved_devices.append(device)
     return resolved_devices
 
 
-def build_email(device: dict[str, str]) -> EmailMessage:
-    """Build the resolution email for one verified device."""
-    device_list = f"- Hostname: {device['name']} | IP address: {device['address']}"
+def build_email(devices: list[dict[str, str]]) -> EmailMessage:
+    """Build one resolution email containing all successfully remediated devices."""
+    device_list = "\n".join(
+        f"- Hostname: {device['name']} | IP address: {device['address']}"
+        for device in devices
+    )
     body = (
         "Dear Stakeholders,\n\n"
-        "This is an automated notification to inform you that the DNS service issue and all related device compromises have been successfully resolved. "
+        "This is an automated notification to inform you that the DNS service issue and all related device compromises have been successfully resolved.\n\n"
         "The following devices were affected and have now been remediated:\n\n"
         f"{device_list}\n\n"
         "No further action is required at this time. If you have any questions or concerns, please contact the IT support team.\n\n"
         "Thank you for your attention.\n\n"
-        "Best regards,  \n"
-        "Network Monitoring System  \n"
+        "Best regards,\n"
+        "Network Monitoring System"
     )
     message = EmailMessage()
     message["Subject"] = SUBJECT
@@ -56,7 +55,7 @@ def build_email(device: dict[str, str]) -> EmailMessage:
 
 
 def send_resolution_emails(devices: list[dict[str, str]]) -> bool:
-    """Send one resolution email per device and report SMTP acceptance."""
+    """Send a resolution email for the resolved devices and verify the SMTP server accepted it."""
     if not devices:
         print("No devices with resolved DNS settings were found; no emails sent.")
         return True
@@ -66,19 +65,14 @@ def send_resolution_emails(devices: list[dict[str, str]]) -> bool:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as server:
             server.ehlo()
             print(f"Connected to email server {SMTP_HOST}:{SMTP_PORT}")
-            for device in devices:
-                try:
-                    refused = server.send_message(build_email(device))
-                    accepted = not refused
-                    status = "SUCCESS" if accepted else "FAILED"
-                    print(
-                        f"{status}: resolution email for {device['name']} ({device['address']}) "
-                        "accepted by the email server"
-                    )
-                    all_sent = all_sent and accepted
-                except (OSError, smtplib.SMTPException) as exc:
-                    all_sent = False
-                    print(f"FAILED: resolution email for {device['name']} ({device['address']}): {exc}")
+            message = build_email(devices)
+            refused = server.send_message(message)
+            accepted = not refused
+            status = "SUCCESS" if accepted else "FAILED"
+            print(
+                f"{status}: resolution email for {len(devices)} device(s) accepted by the email server"
+            )
+            all_sent = all_sent and accepted
     except (OSError, smtplib.SMTPException) as exc:
         print(f"FAILED: could not connect to {SMTP_HOST}:{SMTP_PORT}: {exc}", file=sys.stderr)
         return False
