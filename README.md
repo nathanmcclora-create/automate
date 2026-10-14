@@ -1,7 +1,6 @@
-=======================================================================================================================
+========================================================================
 # Network Automation & DNS Resolution Revision Project (Task 1)
-=======================================================================================================================
-
+========================================================================
 
 This repository contains a suite of Python automation scripts, device metrics, and orchestration tools engineered to manage, monitor, verify, and remediate core network services and DNS infrastructures. The codebase interfaces with a virtualized testbed environment to execute health checks, programmatic configurations, and asynchronous stakeholder alerting.
 
@@ -76,9 +75,9 @@ d522-Task-1-revision/
 1. **Device Inventory Execution:** The automation engine queries device objects directly out of the tracked `network_devices.csv` manifest file. Ensure target parameters remain accurate to your environment.
 2. **Environment Cache:** Local compiled python configurations (`.pyc` runtimes) generated during simulation cycles are isolated within internal `__pycache__` footprints to keep execution clean.
 
-=======================================================================================================================
+========================================================================
 ## 📖 Usage Guide
-=======================================================================================================================
+========================================================================
 
 
 All scripts within this automation suite are executed via the command-line interface. The core execution engine systematically processes the structured target assets tracked within `network_devices.csv`.
@@ -186,9 +185,9 @@ The core automation scripts return clean, actionable system status flags upon te
 | **`3`** | **Authentication Fault** | Secure socket login failed. Verify user credentials inside your configuration variables. |
 
 
-=======================================================================================================================
+========================================================================
 ## 🚀 CI/CD Automation (Jenkins Pipeline Staging)
-=======================================================================================================================
+========================================================================
 
 
 To enforce continuous infrastructure verification, this project is designed to run automatically within a CI/CD pipeline tool like **Jenkins**. The following declarative Jenkinsfile automates the deployment validation process every time a configuration change is staged or pushed.
